@@ -1,4 +1,3 @@
-import builtins
 import os
 import re
 import shlex
@@ -7,26 +6,6 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Tuple, Union
-
-old_print = builtins.print
-
-
-def hook_print():
-    """
-    hook 系统print 默认flush参数为True
-    """
-
-    def my_print(*args, **kwargs):
-        # old_print("hooked print")
-        if "flush" not in kwargs:
-            kwargs["flush"] = True
-        old_print(*args, **kwargs)
-
-    builtins.print = my_print
-
-
-def unhook_print():
-    builtins.print = old_print
 
 
 @contextmanager
@@ -170,5 +149,4 @@ def build():
 
 
 if __name__ == "__main__":
-    hook_print()
     build()
