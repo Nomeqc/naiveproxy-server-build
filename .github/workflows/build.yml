@@ -1,0 +1,35 @@
+name: build caddy
+
+on:
+  workflow_dispatch:
+
+env:
+  REPO_PARENT: 'main'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        path: ${{ env.REPO_PARENT }}
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: 'stable'
+
+    - name: Build
+      run: |
+        python -u "${REPO_PARENT}/build.py"
+    
+    - name: Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: "caddy"
+        tag_name: "${{ env.NEW_TAG }}"
+        name: "${{ env.NEW_TAG }}"
+        body: "## 详细版本号：${{ env.FULL_VERSION }}"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
