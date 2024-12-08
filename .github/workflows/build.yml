@@ -31,5 +31,6 @@ jobs:
         tag_name: "${{ env.NEW_TAG }}"
         name: "${{ env.NEW_TAG }}"
         body: "## 详细版本号：${{ env.FULL_VERSION }}"
+        make_latest: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
