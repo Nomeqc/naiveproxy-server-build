@@ -1,11 +1,8 @@
 import os
 import re
-import shlex
-import subprocess
-import sys
 from contextlib import contextmanager
 from pathlib import Path
-from typing import List, Tuple, Union
+from typing import Iterable, Tuple, Union
 
 
 @contextmanager
@@ -19,37 +16,75 @@ def cwd(path):
 
 
 def runcmd(
-    args: Union[str, List[str]], shell=False, show_window=False, timeout=None
+    args: Union[str, Iterable[Union[str, Path]]],
+    shell=False,
+    console_output=False,
+    show_window=False,
+    input=None,
+    timeout=None,
+    check=False,
+    **kwargs,
 ) -> Tuple[str, int]:
+    """对subprocess.run的封装，以便更易于使用
+
+    Args:
+        args (Union[str, Iterable[Union[str, Path]]]): 命令参数，可以是str,list,tuple等可迭代对象
+        shell (bool, optional): 是否用shell执行. Defaults to False.
+        show_window (bool, optional): 是否显示控制台，仅windows生效. Defaults to False.
+        input (str, optional): 用户输入. Defaults to None.
+        console_output (bool, optional): 是否输出到控制台，如果为True，则直接输出到控制台，否则捕获输出作为结果返回 Defaults to False.
+        timeout (float, optional): 超时时间. Defaults to None.
+        check (bool, optional): 是否检查状态码，不为0则抛出异常. Defaults to False.
+    Returns:
+        Tuple[str, int]: 返回：(output, returncode)
+    """
     try:
         import shlex
         import subprocess
 
         if isinstance(args, str):
-            if not shell:
+            if os.name == "posix":
                 args = shlex.split(args)
-        elif isinstance(args, list):
-            if shell:
+        elif isinstance(args, Iterable):
+            _args = []
+            for item in args:
+                if not isinstance(item, (str, Path)):
+                    raise TypeError(
+                        f"Items in args must be a str or Path, not {type(item)}"
+                    )
+                _args.append(str(item))
+            args = _args
+            if os.name == "nt":
                 args = subprocess.list2cmdline(args)
         else:
-            raise TypeError(
-                f"args type error: {type(args)}, args type must be str or list."
-            )
+            raise TypeError(f"{type(args)} args is not allowed")
 
-        startupinfo = None
-        if os.name == "nt" and not shell and not show_window:
-            startupinfo = subprocess.STARTUPINFO()
+        if os.name == "nt" and not show_window:
+            startupinfo = kwargs.get("startupinfo", subprocess.STARTUPINFO())
+            if not isinstance(startupinfo, subprocess.STARTUPINFO):
+                raise TypeError(
+                    f"startupinfo must be a subprocess.STARTUPINFO, not {type(startupinfo)}"
+                )
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        proc = subprocess.Popen(
+            kwargs["startupinfo"] = startupinfo
+
+        kwargs["shell"] = shell
+        result = subprocess.run(
             args,
-            startupinfo=startupinfo,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            shell=shell,
+            input=input,
+            capture_output=not console_output,
+            timeout=timeout,
+            check=check,
+            **kwargs,
         )
-        stdout, _ = proc.communicate(timeout=timeout)
-        retcode = proc.returncode
-        stdout = stdout.rstrip(b"\r\n")
+        retcode = result.returncode
+        if console_output:
+            return "", retcode
+        stdout = result.stdout + result.stderr
+        if stdout[-2:] == b"\r\n":
+            stdout = stdout[:-2]
+        elif stdout[-1:] == b"\n":
+            stdout = stdout[:-1]
         for enc in ["utf-8", "gbk"]:
             try:
                 output = stdout.decode(enc)
@@ -57,28 +92,38 @@ def runcmd(
             except Exception:
                 pass
         output = stdout.decode("utf-8", errors="ignore")
-        return output, retcode
+    except ValueError:
+        raise
+    except TypeError:
+        raise
     except Exception as e:
+        if check and isinstance(e, subprocess.CalledProcessError):
+            raise
         output = str(e)
         retcode = 2
-        return output, retcode
+    return output, retcode
 
 
-def execute(cmd: str):
+def shell_exec(cmd: str):
     print(f"🛩️ 运行命令: {cmd}")
     try:
-        result = subprocess.run(shlex.split(cmd))
-        if result.returncode != 0:
-            sys.exit(1)
-    except Exception as e:
-        print(f"❌出错了：{e}")
-    # assert result.returncode == 0, "出错了："
+        runcmd(cmd, console_output=True, check=True)
+    except Exception:
+        print("❌出错了：")
+        raise
+
+
+def runcmd_check_error(cmd: str):
+    try:
+        return runcmd(cmd, check=True)
+    except Exception:
+        print("❌出错了：")
+        raise
 
 
 def get_caddy_version():
     cmd = "./caddy version"
-    out, retcode = runcmd(cmd)
-    assert retcode == 0, f"出错了：{out}"
+    out, _ = runcmd_check_error(cmd)
     # out = "v2.8.4 h1:q3pe0wpBj1OcHFZ3n/1nl4V4bxBrYoSoab7rL9BMYNk="
     version = full_version = out.strip()
     result = re.search(r"\S+", version)
@@ -89,8 +134,7 @@ def get_caddy_version():
 
 def get_tags():
     cmd = "git tag --list"
-    out, retcode = runcmd(cmd)
-    assert retcode == 0, f"出错了：{out}"
+    out, _ = runcmd_check_error(cmd)
     return [item.strip() for item in out.split("\n")]
 
 
@@ -112,11 +156,11 @@ def build():
     repo_parent = os.getenv("REPO_PARENT", "")
     github_repo = os.getenv("GITHUB_REPOSITORY", "")
 
-    execute("go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest")
-    execute(
+    shell_exec("go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest")
+    shell_exec(
         "xcaddy build --with github.com/caddyserver/forwardproxy=github.com/klzgrad/forwardproxy@naive"
     )
-    execute("chmod +x ./caddy")
+    shell_exec("chmod +x ./caddy")
     full_version, short_version = get_caddy_version()
     print(f"full version: {full_version} version: {short_version}")
 
@@ -141,7 +185,7 @@ def build():
             f'git push origin "{new_tag}"',
         ]
         for cmd in cmd_list:
-            execute(cmd)
+            shell_exec(cmd)
 
         # 将新tag写入到环境变量文件 以备下一步使用
         set_runner_env_var("NEW_TAG", new_tag)
