@@ -18,69 +18,100 @@ def cwd(path):
 def runcmd(
     args: Union[str, Iterable[Union[str, Path]]],
     shell=False,
-    console_output=False,
+    enable_stdout=False,
     show_window=False,
     input=None,
     timeout=None,
     check=False,
     **kwargs,
 ) -> Tuple[str, int]:
-    """对subprocess.run的封装，以便更易于使用
+    """对subprocess.Popen的封装
 
     Args:
         args (Union[str, Iterable[Union[str, Path]]]): 命令参数，可以是str,list,tuple等可迭代对象
         shell (bool, optional): 是否用shell执行. Defaults to False.
-        show_window (bool, optional): 是否显示控制台，仅windows生效. Defaults to False.
+        enable_stdout (bool, optional): 是否启用标准输出，如果启用将不会捕获输出 Defaults to False.
+        show_window (bool, optional): 是否显示窗口，仅windows生效. Defaults to False.
         input (str, optional): 用户输入. Defaults to None.
-        console_output (bool, optional): 是否输出到控制台，如果为True，则直接输出到控制台，否则捕获输出作为结果返回 Defaults to False.
         timeout (float, optional): 超时时间. Defaults to None.
-        check (bool, optional): 是否检查状态码，不为0则抛出异常. Defaults to False.
+        check (bool, optional): 是否检查异常，为True时将抛出异常. Defaults to False.
     Returns:
         Tuple[str, int]: 返回：(output, returncode)
     """
+    import shlex
+    import subprocess
+
     try:
-        import shlex
-        import subprocess
+        import msvcrt
+    except ModuleNotFoundError:
+        _mswindows = False
+    else:
+        _mswindows = True
 
-        if isinstance(args, str):
-            if os.name == "posix":
-                args = shlex.split(args)
-        elif isinstance(args, Iterable):
-            _args = []
-            for item in args:
-                if not isinstance(item, (str, Path)):
-                    raise TypeError(
-                        f"Items in args must be a str or Path, not {type(item)}"
-                    )
-                _args.append(str(item))
-            args = _args
-            if os.name == "nt":
-                args = subprocess.list2cmdline(args)
-        else:
-            raise TypeError(f"{type(args)} args is not allowed")
+    if input is not None:
+        if kwargs.get("stdin") is not None:
+            raise ValueError("stdin and input arguments may not both be used.")
+        kwargs["stdin"] = subprocess.PIPE
 
-        if os.name == "nt" and not show_window:
-            startupinfo = kwargs.get("startupinfo", subprocess.STARTUPINFO())
-            if not isinstance(startupinfo, subprocess.STARTUPINFO):
+    if not enable_stdout:
+        if kwargs.get("stdout") is not None or kwargs.get("stderr") is not None:
+            raise ValueError(
+                "stdout and stderr arguments may not be used "
+                "when enable_stdout is False."
+            )
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.STDOUT
+
+    if isinstance(args, str):
+        if os.name == "posix":
+            args = shlex.split(args)
+    elif isinstance(args, Iterable):
+        for item in args:
+            if not isinstance(item, (str, Path)):
                 raise TypeError(
-                    f"startupinfo must be a subprocess.STARTUPINFO, not {type(startupinfo)}"
+                    f"Items in args must be a str or Path, not {type(item)}"
                 )
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            kwargs["startupinfo"] = startupinfo
+        args = list(map(str, args))
+        if os.name == "nt":
+            args = subprocess.list2cmdline(args)
+    else:
+        raise TypeError(f"{type(args)} args is not allowed")
 
-        kwargs["shell"] = shell
-        result = subprocess.run(
-            args,
-            input=input,
-            capture_output=not console_output,
-            timeout=timeout,
-            check=check,
-            **kwargs,
+    if os.name == "nt" and not show_window:
+        startupinfo = kwargs.get("startupinfo", subprocess.STARTUPINFO())
+        if not isinstance(startupinfo, subprocess.STARTUPINFO):
+            raise TypeError(
+                f"startupinfo must be a subprocess.STARTUPINFO, not {type(startupinfo)}"
+            )
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        kwargs["startupinfo"] = startupinfo
+    kwargs["shell"] = shell
+    try:
+        with subprocess.Popen(args, **kwargs) as process:
+            try:
+                stdout, stderr = process.communicate(input, timeout=timeout)
+            except subprocess.TimeoutExpired as e:
+                process.kill()
+                if _mswindows:
+                    e.stdout, e.stderr = process.communicate()
+                else:
+                    process.wait()
+                raise
+            except:
+                process.kill()
+                raise
+    except Exception as exc:
+        if check:
+            raise
+        retcode = 2
+        output = "" if enable_stdout else str(exc)
+        return output, retcode
+    retcode = int(process.poll())
+    if check and retcode:
+        raise subprocess.CalledProcessError(
+            retcode, process.args, output=stdout, stderr=stderr
         )
-        retcode = result.returncode
-        if console_output:
-            return "", retcode
-        stdout = result.stdout + result.stderr
+    if stdout:
         if stdout[-2:] == b"\r\n":
             stdout = stdout[:-2]
         elif stdout[-1:] == b"\n":
@@ -92,22 +123,15 @@ def runcmd(
             except Exception:
                 pass
         output = stdout.decode("utf-8", errors="ignore")
-    except ValueError:
-        raise
-    except TypeError:
-        raise
-    except Exception as e:
-        if check and isinstance(e, subprocess.CalledProcessError):
-            raise
-        output = str(e)
-        retcode = 2
+    else:
+        output = ""
     return output, retcode
 
 
 def shell_exec(cmd: str):
     print(f"🛩️ 运行命令: {cmd}")
     try:
-        runcmd(cmd, console_output=True, check=True)
+        runcmd(cmd, enable_stdout=True, check=True)
     except Exception:
         print("❌出错了：")
         raise
