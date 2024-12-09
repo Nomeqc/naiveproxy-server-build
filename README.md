@@ -1,2 +1,2 @@
 # naiveproxy-server-build
-### caddy最新构建版本：[v2.8.4-3](https://github.com/nomeqc/naiveproxy-server-build/releases/download/v2.8.4-3/caddy)
+### caddy最新构建版本：[v2.8.4-4](https://github.com/nomeqc/naiveproxy-server-build/releases/download/v2.8.4-4/caddy)
